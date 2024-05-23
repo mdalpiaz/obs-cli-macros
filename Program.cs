@@ -73,16 +73,11 @@ namespace OBSCLIMacros
     {
         public OBSCredentials Credentials { get; set; } = new();
 
-        public Dictionary<KeyInfo, IAction> Macros { get; set; } = new();
+        public Dictionary<ConsoleKeyInfo, IAction> Macros { get; set; } = new();
 
         public void Save(string filename)
         {
-            var serial = new SerializableConfig
-            {
-                Credentials = Credentials,
-                Macros = Macros.Select(m => (m.Key.ToInt(), m.Value.ToSerializableAction())).ToDictionary()
-            };
-
+            var serial = ToSerializableConfig();
             var json = JsonSerializer.Serialize(serial);
             using var sw = new StreamWriter(filename);
             sw.Write(json);
@@ -101,80 +96,39 @@ namespace OBSCLIMacros
             {
                 return false;
             }
-
-            Credentials = result.Credentials;
-            Macros = result.Macros
-                .Select(m => (KeyInfo.FromInt(m.Key), m.Value.ToAction()))
-                .Where(m => m.Item2 != null)
-                .Select(m => (m.Item1, m.Item2!))
-                .ToDictionary();
+            FromSerializableConfig(result);
 
             return true;
         }
-    }
 
-    class KeyInfo
-    {
-        public ConsoleKey Key { get; private set; }
-
-        public ConsoleModifiers Modifiers { get; private set; }
-
-        public KeyInfo(ConsoleKey key, ConsoleModifiers modifiers)
+        private SerializableConfig ToSerializableConfig()
         {
-            Key = key;
-            Modifiers = modifiers;
+            return new SerializableConfig
+            {
+                Credentials = Credentials,
+                Macros = Macros.Select(m => new SerializableMacro
+                {
+                    KeyChar = m.Key.KeyChar,
+                    Key = m.Key.Key,
+                    Modifiers = m.Key.Modifiers,
+                    Action = m.Value.ToSerializableAction()
+                }).ToList()
+            };
         }
 
-        public KeyInfo(ConsoleKeyInfo keyInfo)
+        private void FromSerializableConfig(SerializableConfig serial)
         {
-            Key = keyInfo.Key;
-            Modifiers = keyInfo.Modifiers;
-        }
-
-        public int ToInt()
-        {
-            int value = 0;
-            value |= (byte)Key;
-            value |= (byte)Modifiers << 8;
-            return value;
-        }
-
-        public static KeyInfo FromInt(int value)
-        {
-            var key = (ConsoleKey)(value & 0xFF);
-            var mods = (ConsoleModifiers)(value >> 8);
-            return new KeyInfo(key, mods);
-        }
-
-        public override bool Equals(object? obj)
-        {
-            if (obj is null) return false;
-            if (obj is not KeyInfo) return false;
-
-            var other = (obj as KeyInfo)!;
-            return other.Key.Equals(Key) && other.Modifiers.Equals(Modifiers);
-        }
-
-        public override string ToString()
-        {
-            return $"{Key}";
-        }
-
-        public static bool operator ==(KeyInfo? l, KeyInfo? r)
-        {
-            if (ReferenceEquals(l, r)) return true;
-            if (l is null || r is null) return false;
-            return l.Equals(r);
-        }
-
-        public static bool operator !=(KeyInfo? l, KeyInfo? r)
-        {
-            return !(l == r);
-        }
-
-        public override int GetHashCode()
-        {
-            return (int)Key.GetHashCode() + (int)Modifiers.GetHashCode();
+            Credentials = serial.Credentials;
+            Macros = serial.Macros
+                .Select(m =>
+                {
+                    var shift = (m.Modifiers & ConsoleModifiers.Shift) != 0;
+                    var alt = (m.Modifiers & ConsoleModifiers.Alt) != 0;
+                    var control = (m.Modifiers & ConsoleModifiers.Control) != 0;
+                    var keyInfo = new ConsoleKeyInfo(m.KeyChar, m.Key, shift, alt, control);
+                    return (keyInfo, m.Action.ToAction());
+                })
+                .ToDictionary();
         }
     }
 
@@ -182,7 +136,18 @@ namespace OBSCLIMacros
     {
         public OBSCredentials Credentials { get; set; } = new();
 
-        public Dictionary<int, SerializableAction> Macros { get; set; } = new();
+        public List<SerializableMacro> Macros { get; set; } = new();
+    }
+
+    class SerializableMacro
+    {
+        public char KeyChar { get; set; }
+
+        public ConsoleKey Key { get; set; }
+
+        public ConsoleModifiers Modifiers { get; set; }
+
+        public SerializableAction Action { get; set; }
     }
 
     public class OBSCredentials
@@ -260,8 +225,7 @@ namespace OBSCLIMacros
                 while (true)
                 {
                     var key = Console.ReadKey(true);
-                    var keyInfo = new KeyInfo(key);
-                    if (Globals.Config.Macros.TryGetValue(keyInfo, out var value))
+                    if (Globals.Config.Macros.TryGetValue(key, out var value))
                     {
                         value.Run(Globals.Client);
                     }
@@ -280,7 +244,7 @@ namespace OBSCLIMacros
                 Console.WriteLine("Exisiting Macros");
                 foreach (var m in Globals.Config.Macros)
                 {
-                    Console.WriteLine($"{m.Key} -> {m.Value}");
+                    Console.WriteLine($"{m.Key.Key} -> {m.Value}");
                 }
 
                 Console.WriteLine();
@@ -320,16 +284,16 @@ namespace OBSCLIMacros
                 }
                 else
                 {
-                    return Task.FromResult<IState>(new AssignActionState(new KeyInfo(key)));
+                    return Task.FromResult<IState>(new AssignActionState(key));
                 }
             }
         }
 
         class AssignActionState : IState
         {
-            private readonly KeyInfo triggerKey;
+            private readonly ConsoleKeyInfo triggerKey;
 
-            public AssignActionState(KeyInfo triggerKey)
+            public AssignActionState(ConsoleKeyInfo triggerKey)
             {
                 this.triggerKey = triggerKey;
             }
@@ -383,7 +347,7 @@ namespace OBSCLIMacros
                     {
                         return Task.FromResult<IState>(new EditState());
                     }
-                    else if (Globals.Config.Macros.Remove(new KeyInfo(key)))
+                    else if (Globals.Config.Macros.Remove(key))
                     {
                         Console.WriteLine($"Removed {key}");
                     }
@@ -410,24 +374,19 @@ namespace OBSCLIMacros
         {
             public ActionTypes Type { get; set; }
 
-            public Dictionary<string, object> Parameters { get; set; } = new();
+            public Dictionary<string, string> Parameters { get; set; } = new();
 
-            public IAction? ToAction()
+            public IAction ToAction()
             {
                 switch (Type)
                 {
                     case ActionTypes.SwitchScene:
                         {
-                            var name = (JsonElement)Parameters[nameof(SwitchSceneAction.SceneName)];
-                            return new SwitchSceneAction(name.GetString()!);
+                            var name = Parameters[nameof(SwitchSceneAction.SceneName)];
+                            return new SwitchSceneAction(name);
                         }
                 }
-                return null;
-            }
-
-            public static SerializableAction FromAction(IAction action)
-            {
-                return action.ToSerializableAction();
+                throw new ArgumentOutOfRangeException($"Action type {Type} is unknown!");
             }
         }
 
