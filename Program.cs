@@ -2,10 +2,15 @@
 using OBSCLIMacros.Actions;
 using OBSCLIMacros.States;
 using OBSStudioClient;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
+
+const string ConfigFileName = "config.json";
+var config = new Config(ConfigFileName);
 
 Console.Write("Loading config...");
-if (Globals.Config.Load(Globals.ConfigFileName))
+if (config.Load())
 {
     Console.WriteLine("OK");
 }
@@ -13,20 +18,21 @@ else
 {
     Console.WriteLine("Config not found");
     var creds = EnterOBSCredentials();
-    Globals.Config.Credentials.Host = creds.Host;
-    Globals.Config.Credentials.Port = creds.Port;
-    Globals.Config.Credentials.Password = creds.Password;
-
-    Globals.Config.Save(Globals.ConfigFileName);
+    config.Credentials.Host = creds.Host;
+    config.Credentials.Port = creds.Port;
+    config.Credentials.Password = creds.Password;
+    config.Save();
 }
+
+var client = new ObsClient();
 
 try
 {
-    var isConnected = await Globals.Client.ConnectAsync(
+    var isConnected = await client.ConnectAsync(
         true,
-        Globals.Config.Credentials.Password,
-        Globals.Config.Credentials.Host,
-        Globals.Config.Credentials.Port,
+        config.Credentials.Password,
+        config.Credentials.Host,
+        config.Credentials.Port,
         OBSStudioClient.Enums.EventSubscriptions.None);
     await Task.Delay(1);    // currently a bug in the OBSClient library, this statement triggers the scheduler to run a task inside this library
 
@@ -35,16 +41,12 @@ try
         return;
     }
 
-    IState state = new MenuState();
-    while (!Globals.Stop)
-    {
-        state = await state.Run();
-    }
+    await MenuState.Run(config, client);
 }
 finally
 {
-    Globals.Client.Disconnect();
-    Globals.Client.Dispose();
+    client.Disconnect();
+    client.Dispose();
 }
 
 static OBSCredentials EnterOBSCredentials()
@@ -75,30 +77,67 @@ namespace OBSCLIMacros
 
         public Dictionary<ConsoleKeyInfo, IAction> Macros { get; set; } = new();
 
-        public void Save(string filename)
+        [JsonIgnore]
+        private string Filename { get; set; }
+
+        public Config(string filename)
+        {
+            Filename = filename;
+        }
+
+        public void Save()
         {
             var serial = ToSerializableConfig();
             var json = JsonSerializer.Serialize(serial);
-            using var sw = new StreamWriter(filename);
+            using var sw = new StreamWriter(Filename);
             sw.Write(json);
         }
 
-        public bool Load(string filename)
+        public bool Load()
         {
-            if (!File.Exists(filename))
+            if (!File.Exists(Filename))
             {
                 return false;
             }
-            using var sr = new StreamReader(filename);
+            using var sr = new StreamReader(Filename);
             var json = sr.ReadToEnd();
             var result = JsonSerializer.Deserialize<SerializableConfig>(json);
             if (result == null)
             {
                 return false;
             }
-            FromSerializableConfig(result);
+
+            Credentials = result.Credentials;
+            Macros = result.Macros
+                .Select(m =>
+                {
+                    var shift = (m.Modifiers & ConsoleModifiers.Shift) != 0;
+                    var alt = (m.Modifiers & ConsoleModifiers.Alt) != 0;
+                    var control = (m.Modifiers & ConsoleModifiers.Control) != 0;
+                    var keyInfo = new ConsoleKeyInfo(m.KeyChar, m.Key, shift, alt, control);
+                    return (keyInfo, m.Action.ToAction());
+                })
+                .ToDictionary();
 
             return true;
+        }
+
+        public string MacrosToString()
+        {
+            if (Macros.Count == 0)
+            {
+                return "Registered Macros: None";
+            }
+            else
+            {
+                var sb = new StringBuilder();
+                sb.AppendLine("Registered Macros:");
+                foreach (var m in Macros.OrderBy(m => m.Key.Key))
+                {
+                    sb.AppendLine($"{m.Key.PrettyPrint()} -> {m.Value}");
+                }
+                return sb.ToString();
+            }
         }
 
         private SerializableConfig ToSerializableConfig()
@@ -114,21 +153,6 @@ namespace OBSCLIMacros
                     Action = m.Value.ToSerializableAction()
                 }).ToList()
             };
-        }
-
-        private void FromSerializableConfig(SerializableConfig serial)
-        {
-            Credentials = serial.Credentials;
-            Macros = serial.Macros
-                .Select(m =>
-                {
-                    var shift = (m.Modifiers & ConsoleModifiers.Shift) != 0;
-                    var alt = (m.Modifiers & ConsoleModifiers.Alt) != 0;
-                    var control = (m.Modifiers & ConsoleModifiers.Control) != 0;
-                    var keyInfo = new ConsoleKeyInfo(m.KeyChar, m.Key, shift, alt, control);
-                    return (keyInfo, m.Action.ToAction());
-                })
-                .ToDictionary();
         }
     }
 
@@ -157,164 +181,151 @@ namespace OBSCLIMacros
         public string Password { get; set; } = string.Empty;
     }
 
-    static class Globals
+    public static class ConsoleKeyInfoExtensions
     {
-        public const string ConfigFileName = "config.json";
-
-        public static Config Config { get; private set; } = new();
-
-        public static bool Stop { get; set; } = false;
-
-        public static ObsClient Client { get; } = new();
+        public static string PrettyPrint(this ConsoleKeyInfo key)
+        {
+            string modifiers = string.Empty;
+            modifiers += (key.Modifiers & ConsoleModifiers.Alt) != 0 ? "+ALT" : string.Empty;
+            modifiers += (key.Modifiers & ConsoleModifiers.Shift) != 0 ? "+SHIFT" : string.Empty;
+            modifiers += (key.Modifiers & ConsoleModifiers.Control) != 0 ? "+CTRL" : string.Empty;
+            return $"{key.Key}{modifiers}";
+        }
     }
 
     namespace States
     {
-        interface IState
+        static class MenuState
         {
-            Task<IState> Run();
-        }
-
-        class ExitState : IState
-        {
-            public Task<IState> Run()
+            public static async Task Run(Config config, ObsClient client)
             {
-                Globals.Stop = true;
-                return Task.FromResult<IState>(this);
-            }
-        }
-
-        class MenuState : IState
-        {
-            public Task<IState> Run()
-            {
-                Console.WriteLine("m) Macro Mode");
-                Console.WriteLine("e) Edit Mode");
-                Console.WriteLine("s) Save");
-
                 while (true)
                 {
+                    Console.Clear();
+                    Console.WriteLine("m) Macro Mode");
+                    Console.WriteLine("e) Edit Mode");
+                    Console.WriteLine("s) Save");
+
                     var key = Console.ReadKey(true);
-                    if (key.Key == ConsoleKey.M)
+
+                    if (key.Key == ConsoleKey.Escape)
                     {
-                        return Task.FromResult<IState>(new MacroState());
+                        return;
+                    }
+                    else if (key.Key == ConsoleKey.M)
+                    {
+                        await MacroState.Run(config, client);
                     }
                     else if (key.Key == ConsoleKey.E)
                     {
-                        return Task.FromResult<IState>(new EditState());
+                        await EditState.Run(config, client);
                     }
                     else if (key.Key == ConsoleKey.S)
                     {
-                        Globals.Config.Save(Globals.ConfigFileName);
-                        return Task.FromResult<IState>(this);
-                    }
-                    else if (key.Key == ConsoleKey.Escape)
-                    {
-                        return Task.FromResult<IState>(new ExitState());
+                        config.Save();
                     }
                 }
             }
         }
 
-        class MacroState : IState
+        static class MacroState
         {
-            public Task<IState> Run()
+            public static async Task Run(Config config, ObsClient client)
             {
-                Console.WriteLine("Macro State Active");
+                Console.Clear();
+                Console.WriteLine("Macro State");
+                Console.WriteLine(config.MacrosToString());
 
                 while (true)
                 {
                     var key = Console.ReadKey(true);
-                    if (Globals.Config.Macros.TryGetValue(key, out var value))
+
+                    if (key.Key == ConsoleKey.Escape)
                     {
-                        value.Run(Globals.Client);
+                        return;
                     }
-                    else if (key.Key == ConsoleKey.Escape)
+                    else if (config.Macros.TryGetValue(key, out var value))
                     {
-                        return Task.FromResult<IState>(new MenuState());
+                        await value.Run(client);
                     }
                 }
             }
         }
 
-        class EditState : IState
+        static class EditState
         {
-            public Task<IState> Run()
+            public static async Task Run(Config config, ObsClient client)
             {
-                Console.WriteLine("Exisiting Macros");
-                foreach (var m in Globals.Config.Macros)
-                {
-                    Console.WriteLine($"{m.Key.Key} -> {m.Value}");
-                }
-
-                Console.WriteLine();
-                Console.WriteLine("n) New Macro");
-                Console.WriteLine("r) Remove Macro");
-
                 while (true)
                 {
+                    Console.Clear();
+                    Console.WriteLine(config.MacrosToString());
+                    Console.WriteLine("n) New Macro");
+                    Console.WriteLine("r) Remove Macro");
+
                     var key = Console.ReadKey(true);
 
-                    if (key.Key == ConsoleKey.N)
+                    if (key.Key == ConsoleKey.Escape)
                     {
-                        return Task.FromResult<IState>(new RecordKeyState());
+                        return;
+                    }
+                    else if (key.Key == ConsoleKey.N)
+                    {
+                        await RecordKeyState.Run(config, client);
                     }
                     else if (key.Key == ConsoleKey.R)
                     {
-                        return Task.FromResult<IState>(new RemoveKeyState());
-                    }
-                    else if (key.Key == ConsoleKey.Escape)
-                    {
-                        return Task.FromResult<IState>(new MenuState());
+                        RemoveKeyState.Run(config);
                     }
                 }
             }
         }
 
-        class RecordKeyState : IState
+        static class RecordKeyState
         {
-            public Task<IState> Run()
+            public static async Task Run(Config config, ObsClient client)
             {
-                Console.WriteLine("Press key to assign action:");
-
-                var key = Console.ReadKey(true);
-                if (key.Key == ConsoleKey.Escape)
-                {
-                    return Task.FromResult<IState>(new EditState());
-                }
-                else
-                {
-                    return Task.FromResult<IState>(new AssignActionState(key));
-                }
-            }
-        }
-
-        class AssignActionState : IState
-        {
-            private readonly ConsoleKeyInfo triggerKey;
-
-            public AssignActionState(ConsoleKeyInfo triggerKey)
-            {
-                this.triggerKey = triggerKey;
-            }
-
-            public async Task<IState> Run()
-            {
-                Console.WriteLine("Select Action:");
-                Console.WriteLine("s) Switch Scene");
-                Console.WriteLine("t) Toggle Scene Item");
-
                 while (true)
                 {
+                    Console.Clear();
+                    Console.WriteLine("Press key to assign new macro:");
+
                     var key = Console.ReadKey(true);
                     if (key.Key == ConsoleKey.Escape)
                     {
-                        return new RecordKeyState();
+                        return;
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Key pressed: {key.PrettyPrint()}");
+                        if (await AssignActionState.Run(config, client, key))
+                        {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        static class AssignActionState
+        {
+            public static async Task<bool> Run(Config config, ObsClient client, ConsoleKeyInfo triggerKey)
+            {
+                while (true)
+                {
+                    Console.WriteLine("Select Action:");
+                    Console.WriteLine("s) Switch Scene");
+                    Console.WriteLine("t) Toggle Scene Item");
+
+                    var key = Console.ReadKey(true);
+                    if (key.Key == ConsoleKey.Escape)
+                    {
+                        return false;
                     }
                     else if (key.Key == ConsoleKey.S)
                     {
                         Console.WriteLine("Listing Scenes...");
-                        var scenes = await Globals.Client.GetSceneList();
+                        var scenes = await client.GetSceneList();
                         foreach (var s in scenes.Scenes)
                         {
                             Console.WriteLine($"{s.SceneIndex}) {s.SceneName}");
@@ -329,14 +340,14 @@ namespace OBSCLIMacros
 
                         var scene = scenes.Scenes.First(s => s.SceneIndex == index);
 
-                        Globals.Config.Macros.Add(triggerKey, new SwitchSceneAction(scene.SceneName));
+                        config.Macros.Add(triggerKey, new SwitchSceneAction(scene.SceneName));
 
-                        return new EditState();
+                        return true;
                     }
                     else if (key.Key == ConsoleKey.T)
                     {
                         Console.WriteLine("Listing Scenes...");
-                        var scenes = await Globals.Client.GetSceneList();
+                        var scenes = await client.GetSceneList();
                         foreach (var s in scenes.Scenes)
                         {
                             Console.WriteLine($"{s.SceneIndex}) {s.SceneName}");
@@ -352,7 +363,7 @@ namespace OBSCLIMacros
                         var scene = scenes.Scenes.First(s => s.SceneIndex == index);
 
                         Console.WriteLine("Listing Items...");
-                        var items = await Globals.Client.GetSceneItemList(scene.SceneName);
+                        var items = await client.GetSceneItemList(scene.SceneName);
                         foreach (var i in items)
                         {
                             Console.WriteLine($"{i.SceneItemIndex}) {i.SourceName}");
@@ -366,28 +377,37 @@ namespace OBSCLIMacros
 
                         var item = items.First(i => i.SceneItemIndex == index);
 
-                        Globals.Config.Macros.Add(triggerKey, new ToggleItemAction(scene.SceneName, item.SceneItemId, item.SourceName, item.SceneItemEnabled));
+                        config.Macros.Add(triggerKey, new ToggleItemAction(scene.SceneName, item.SceneItemId, item.SourceName, item.SceneItemEnabled));
 
-                        return new EditState();
+                        return true;
                     }
                 }
             }
         }
 
-        class RemoveKeyState : IState
+        static class RemoveKeyState
         {
-            public Task<IState> Run()
+            public static void Run(Config config)
             {
                 while (true)
                 {
+                    Console.Clear();
+                    Console.WriteLine(config.MacrosToString());
+                    Console.WriteLine("Enter key to remove");
+
                     var key = Console.ReadKey(true);
                     if (key.Key == ConsoleKey.Escape)
                     {
-                        return Task.FromResult<IState>(new EditState());
+                        return;
                     }
-                    else if (Globals.Config.Macros.Remove(key))
+                    else if (config.Macros.Remove(key))
                     {
-                        Console.WriteLine($"Removed {key}");
+                        Console.WriteLine($"Removed {key.PrettyPrint()}");
+                        return;
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Key {key.PrettyPrint()} not found");
                     }
                 }
             }
