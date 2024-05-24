@@ -302,6 +302,7 @@ namespace OBSCLIMacros
             {
                 Console.WriteLine("Select Action:");
                 Console.WriteLine("s) Switch Scene");
+                Console.WriteLine("t) Toggle Scene Item");
 
                 while (true)
                 {
@@ -329,6 +330,43 @@ namespace OBSCLIMacros
                         var scene = scenes.Scenes.First(s => s.SceneIndex == index);
 
                         Globals.Config.Macros.Add(triggerKey, new SwitchSceneAction(scene.SceneName));
+
+                        return new EditState();
+                    }
+                    else if (key.Key == ConsoleKey.T)
+                    {
+                        Console.WriteLine("Listing Scenes...");
+                        var scenes = await Globals.Client.GetSceneList();
+                        foreach (var s in scenes.Scenes)
+                        {
+                            Console.WriteLine($"{s.SceneIndex}) {s.SceneName}");
+                        }
+
+                        Console.WriteLine("Enter index:");
+                        int index;
+                        while (!int.TryParse(Console.ReadLine(), out index))
+                        {
+                            Console.WriteLine("Not a number!");
+                        }
+
+                        var scene = scenes.Scenes.First(s => s.SceneIndex == index);
+
+                        Console.WriteLine("Listing Items...");
+                        var items = await Globals.Client.GetSceneItemList(scene.SceneName);
+                        foreach (var i in items)
+                        {
+                            Console.WriteLine($"{i.SceneItemIndex}) {i.SourceName}");
+                        }
+
+                        Console.WriteLine("Enter index:");
+                        while (!int.TryParse(Console.ReadLine(), out index))
+                        {
+                            Console.WriteLine("Not a number!");
+                        }
+
+                        var item = items.First(i => i.SceneItemIndex == index);
+
+                        Globals.Config.Macros.Add(triggerKey, new ToggleItemAction(scene.SceneName, item.SceneItemId, item.SourceName, item.SceneItemEnabled));
 
                         return new EditState();
                     }
@@ -360,7 +398,8 @@ namespace OBSCLIMacros
     {
         enum ActionTypes
         {
-            SwitchScene = 1
+            SwitchScene,
+            ToggleItem
         }
 
         interface IAction
@@ -384,6 +423,17 @@ namespace OBSCLIMacros
                         {
                             var name = Parameters[nameof(SwitchSceneAction.SceneName)];
                             return new SwitchSceneAction(name);
+                        }
+                    case ActionTypes.ToggleItem:
+                        {
+                            var scene = Parameters[nameof(ToggleItemAction.SceneName)];
+                            if (!int.TryParse(Parameters[nameof(ToggleItemAction.ItemID)], out var itemID))
+                            {
+                                throw new ArgumentException("ItemID could not be parsed!");
+                            }
+                            var itemName = Parameters[nameof(ToggleItemAction.ItemName)];
+                            //var enabled = await Globals.Client.GetSceneItemEnabled(scene, itemID);
+                            return new ToggleItemAction(scene, itemID, itemName, false);
                         }
                 }
                 throw new ArgumentOutOfRangeException($"Action type {Type} is unknown!");
@@ -415,6 +465,46 @@ namespace OBSCLIMacros
             public override string ToString()
             {
                 return $"Switch to Scene: {SceneName}";
+            }
+        }
+
+        class ToggleItemAction : IAction
+        {
+            public string SceneName { get; private set; }
+
+            public int ItemID { get; private set; }
+
+            public string ItemName { get; private set; }
+
+            private bool Enabled { get; set; }
+
+            public ToggleItemAction(string scene, int itemID, string itemName, bool enabled)
+            {
+                SceneName = scene;
+                ItemID = itemID;
+                ItemName = itemName;
+                Enabled = enabled;
+            }
+
+            public async Task Run(ObsClient client)
+            {
+                Enabled = !Enabled;
+                await client.SetSceneItemEnabled(SceneName, ItemID, Enabled);
+            }
+
+            public SerializableAction ToSerializableAction()
+            {
+                var act = new SerializableAction();
+                act.Type = ActionTypes.ToggleItem;
+                act.Parameters.Add(nameof(SceneName), SceneName);
+                act.Parameters.Add(nameof(ItemID), ItemID.ToString());
+                act.Parameters.Add(nameof(ItemName), ItemName);
+                return act;
+            }
+
+            public override string ToString()
+            {
+                return $"Toggle {ItemName} in {SceneName}";
             }
         }
     }
