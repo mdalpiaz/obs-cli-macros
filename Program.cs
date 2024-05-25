@@ -313,9 +313,13 @@ namespace OBSCLIMacros
             {
                 while (true)
                 {
-                    Console.WriteLine("Select Action:");
-                    Console.WriteLine("s) Switch Scene");
-                    Console.WriteLine("t) Toggle Scene Item");
+                    Console.WriteLine(
+@"Select Action:
+s) Switch Scene
+q) Enable Scene Item
+w) Disable Scene Item
+e) Mute Input
+r) Unmute Input");
 
                     var key = Console.ReadKey(true);
                     if (key.Key == ConsoleKey.Escape)
@@ -340,11 +344,11 @@ namespace OBSCLIMacros
 
                         var scene = scenes.Scenes.First(s => s.SceneIndex == index);
 
-                        config.Macros.Add(triggerKey, new SwitchSceneAction(scene.SceneName));
+                        config.Macros.Add(triggerKey, new SwitchScene(scene.SceneName));
 
                         return true;
                     }
-                    else if (key.Key == ConsoleKey.T)
+                    else if (key.Key == ConsoleKey.Q)
                     {
                         Console.WriteLine("Listing Scenes...");
                         var scenes = await client.GetSceneList();
@@ -377,7 +381,88 @@ namespace OBSCLIMacros
 
                         var item = items.First(i => i.SceneItemIndex == index);
 
-                        config.Macros.Add(triggerKey, new ToggleItemAction(scene.SceneName, item.SceneItemId, item.SourceName, item.SceneItemEnabled));
+                        config.Macros.Add(triggerKey, new EnableItem(scene.SceneName, item.SceneItemId, item.SourceName));
+
+                        return true;
+                    }
+                    else if (key.Key == ConsoleKey.W)
+                    {
+                        Console.WriteLine("Listing Scenes...");
+                        var scenes = await client.GetSceneList();
+                        foreach (var s in scenes.Scenes)
+                        {
+                            Console.WriteLine($"{s.SceneIndex}) {s.SceneName}");
+                        }
+
+                        Console.WriteLine("Enter index:");
+                        int index;
+                        while (!int.TryParse(Console.ReadLine(), out index))
+                        {
+                            Console.WriteLine("Not a number!");
+                        }
+
+                        var scene = scenes.Scenes.First(s => s.SceneIndex == index);
+
+                        Console.WriteLine("Listing Items...");
+                        var items = await client.GetSceneItemList(scene.SceneName);
+                        foreach (var i in items)
+                        {
+                            Console.WriteLine($"{i.SceneItemIndex}) {i.SourceName}");
+                        }
+
+                        Console.WriteLine("Enter index:");
+                        while (!int.TryParse(Console.ReadLine(), out index))
+                        {
+                            Console.WriteLine("Not a number!");
+                        }
+
+                        var item = items.First(i => i.SceneItemIndex == index);
+
+                        config.Macros.Add(triggerKey, new DisableItem(scene.SceneName, item.SceneItemId, item.SourceName));
+
+                        return true;
+                    }
+                    else if (key.Key == ConsoleKey.E)
+                    {
+                        Console.WriteLine("Listing Inputs...");
+                        var inputs = (await client.GetInputList()).Select((input, index) => (index, input.InputName));
+                        foreach (var i in inputs)
+                        {
+                            Console.WriteLine($"{i.index}) {i.InputName}");
+                        }
+
+                        Console.WriteLine("Enter index:");
+                        int index;
+                        while (!int.TryParse(Console.ReadLine(), out index))
+                        {
+                            Console.WriteLine("Not a number!");
+                        }
+
+                        var input = inputs.First(i => i.index == index);
+
+                        config.Macros.Add(triggerKey, new MuteInput(input.InputName));
+
+                        return true;
+                    }
+                    else if (key.Key == ConsoleKey.R)
+                    {
+                        Console.WriteLine("Listing Inputs...");
+                        var inputs = (await client.GetInputList()).Select((input, index) => (index, input.InputName));
+                        foreach (var i in inputs)
+                        {
+                            Console.WriteLine($"{i.index}) {i.InputName}");
+                        }
+
+                        Console.WriteLine("Enter index:");
+                        int index;
+                        while (!int.TryParse(Console.ReadLine(), out index))
+                        {
+                            Console.WriteLine("Not a number!");
+                        }
+
+                        var input = inputs.First(i => i.index == index);
+
+                        config.Macros.Add(triggerKey, new UnmuteInput(input.InputName));
 
                         return true;
                     }
@@ -419,7 +504,11 @@ namespace OBSCLIMacros
         enum ActionTypes
         {
             SwitchScene,
-            ToggleItem
+            EnableItem,
+            DisableItem,
+            ToggleInput,
+            MuteInput,
+            UnmuteInput
         }
 
         interface IAction
@@ -441,30 +530,48 @@ namespace OBSCLIMacros
                 {
                     case ActionTypes.SwitchScene:
                         {
-                            var name = Parameters[nameof(SwitchSceneAction.SceneName)];
-                            return new SwitchSceneAction(name);
+                            var name = Parameters[nameof(SwitchScene.SceneName)];
+                            return new SwitchScene(name);
                         }
-                    case ActionTypes.ToggleItem:
+                    case ActionTypes.EnableItem:
                         {
-                            var scene = Parameters[nameof(ToggleItemAction.SceneName)];
-                            if (!int.TryParse(Parameters[nameof(ToggleItemAction.ItemID)], out var itemID))
-                            {
-                                throw new ArgumentException("ItemID could not be parsed!");
-                            }
-                            var itemName = Parameters[nameof(ToggleItemAction.ItemName)];
-                            //var enabled = await Globals.Client.GetSceneItemEnabled(scene, itemID);
-                            return new ToggleItemAction(scene, itemID, itemName, false);
+                            var scene = Parameters[nameof(EnableItem.SceneName)];
+                            var itemId = int.Parse(Parameters[nameof(EnableItem.ItemID)]);
+                            var itemName = Parameters[nameof(EnableItem.ItemName)];
+                            return new EnableItem(scene, itemId, itemName);
+                        }
+                    case ActionTypes.DisableItem:
+                        {
+                            var scene = Parameters[nameof(DisableItem.SceneName)];
+                            var itemId = int.Parse(Parameters[nameof(DisableItem.ItemID)]);
+                            var itemName = Parameters[nameof(DisableItem.ItemName)];
+                            return new DisableItem(scene, itemId, itemName);
+                        }
+                    case ActionTypes.ToggleInput:
+                        {
+                            var inputName = Parameters[nameof(ToggleInput.InputName)];
+                            return new ToggleInput(inputName);
+                        }
+                    case ActionTypes.MuteInput:
+                        {
+                            var inputName = Parameters[nameof(MuteInput.InputName)];
+                            return new MuteInput(inputName);
+                        }
+                    case ActionTypes.UnmuteInput:
+                        {
+                            var inputName = Parameters[nameof(UnmuteInput.InputName)];
+                            return new UnmuteInput(inputName);
                         }
                 }
                 throw new ArgumentOutOfRangeException($"Action type {Type} is unknown!");
             }
         }
 
-        class SwitchSceneAction : IAction
+        class SwitchScene : IAction
         {
             public string SceneName { get; private set; }
 
-            public SwitchSceneAction(string sceneName)
+            public SwitchScene(string sceneName)
             {
                 SceneName = sceneName;
             }
@@ -488,7 +595,7 @@ namespace OBSCLIMacros
             }
         }
 
-        class ToggleItemAction : IAction
+        class EnableItem : IAction
         {
             public string SceneName { get; private set; }
 
@@ -496,26 +603,22 @@ namespace OBSCLIMacros
 
             public string ItemName { get; private set; }
 
-            private bool Enabled { get; set; }
-
-            public ToggleItemAction(string scene, int itemID, string itemName, bool enabled)
+            public EnableItem(string scene, int itemID, string itemName)
             {
                 SceneName = scene;
                 ItemID = itemID;
                 ItemName = itemName;
-                Enabled = enabled;
             }
 
             public async Task Run(ObsClient client)
             {
-                Enabled = !Enabled;
-                await client.SetSceneItemEnabled(SceneName, ItemID, Enabled);
+                await client.SetSceneItemEnabled(SceneName, ItemID, true);
             }
 
             public SerializableAction ToSerializableAction()
             {
                 var act = new SerializableAction();
-                act.Type = ActionTypes.ToggleItem;
+                act.Type = ActionTypes.EnableItem;
                 act.Parameters.Add(nameof(SceneName), SceneName);
                 act.Parameters.Add(nameof(ItemID), ItemID.ToString());
                 act.Parameters.Add(nameof(ItemName), ItemName);
@@ -524,7 +627,127 @@ namespace OBSCLIMacros
 
             public override string ToString()
             {
-                return $"Toggle {ItemName} in {SceneName}";
+                return $"Enable {ItemName} in {SceneName}";
+            }
+        }
+
+        class DisableItem : IAction
+        {
+            public string SceneName { get; private set; }
+
+            public int ItemID { get; private set; }
+
+            public string ItemName { get; private set; }
+
+            public DisableItem(string sceneName, int itemID, string itemName)
+            {
+                SceneName = sceneName;
+                ItemID = itemID;
+                ItemName = itemName;
+            }
+
+            public async Task Run(ObsClient client)
+            {
+                await client.SetSceneItemEnabled(SceneName, ItemID, false);
+            }
+
+            public SerializableAction ToSerializableAction()
+            {
+                var act = new SerializableAction();
+                act.Type = ActionTypes.DisableItem;
+                act.Parameters.Add(nameof(SceneName), SceneName);
+                act.Parameters.Add(nameof(ItemID), ItemID.ToString());
+                act.Parameters.Add(nameof(ItemName), ItemName);
+                return act;
+            }
+
+            public override string ToString()
+            {
+                return $"Disable {ItemName} in {SceneName}";
+            }
+        }
+
+        class ToggleInput : IAction
+        {
+            public string InputName { get; private set; }
+
+            public ToggleInput(string inputName)
+            {
+                InputName = inputName;
+            }
+
+            public async Task Run(ObsClient client)
+            {
+                await client.ToggleInputMute(InputName);
+            }
+
+            public SerializableAction ToSerializableAction()
+            {
+                var act = new SerializableAction();
+                act.Type = ActionTypes.ToggleInput;
+                act.Parameters.Add(nameof(InputName), InputName);
+                return act;
+            }
+
+            public override string ToString()
+            {
+                return $"Toggle {InputName}";
+            }
+        }
+
+        class MuteInput : IAction
+        {
+            public string InputName { get; private set; }
+
+            public MuteInput(string inputName)
+            {
+                InputName = inputName;
+            }
+
+            public async Task Run(ObsClient client)
+            {
+                await client.SetInputMute(InputName, true);
+            }
+
+            public SerializableAction ToSerializableAction()
+            {
+                var act = new SerializableAction();
+                act.Type = ActionTypes.MuteInput;
+                act.Parameters.Add(nameof(InputName), InputName);
+                return act;
+            }
+
+            public override string ToString()
+            {
+                return $"Mute {InputName}";
+            }
+        }
+
+        class UnmuteInput : IAction
+        {
+            public string InputName { get; private set; }
+
+            public UnmuteInput(string inputName)
+            {
+                InputName = inputName;
+            }
+
+            public async Task Run(ObsClient client)
+            {
+                await client.SetInputMute(InputName, false);
+            }
+
+            public SerializableAction ToSerializableAction()
+            {
+                var act = new SerializableAction();
+                act.Type = ActionTypes.UnmuteInput;
+                act.Parameters.Add(nameof(InputName), InputName);
+                return act;
+            }
+
+            public override string ToString()
+            {
+                return $"Unmute {InputName}";
             }
         }
     }
