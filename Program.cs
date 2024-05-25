@@ -2,7 +2,6 @@
 using OBSCLIMacros.Actions;
 using OBSCLIMacros.States;
 using OBSStudioClient;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -17,28 +16,17 @@ if (config.Load())
 else
 {
     Console.WriteLine("Config not found");
-    var creds = EnterOBSCredentials();
-    config.Credentials.Host = creds.Host;
-    config.Credentials.Port = creds.Port;
-    config.Credentials.Password = creds.Password;
-    config.Save();
+    config.Credentials = EnterOBSCredentials();
 }
 
 var client = new ObsClient();
 
 try
 {
-    var isConnected = await client.ConnectAsync(
-        true,
-        config.Credentials.Password,
-        config.Credentials.Host,
-        config.Credentials.Port,
-        OBSStudioClient.Enums.EventSubscriptions.None);
-    await Task.Delay(1);    // currently a bug in the OBSClient library, this statement triggers the scheduler to run a task inside this library
-
-    if (!isConnected)
+    while (!await Connect(client, config))
     {
-        return;
+        Console.WriteLine("Couldn't connect to OBS. Check host, port and password.");
+        config.Credentials = EnterOBSCredentials();
     }
 
     await MenuState.Run(config, client);
@@ -67,6 +55,48 @@ static OBSCredentials EnterOBSCredentials()
         Port = port,
         Password = password!
     };
+}
+
+static async Task<bool> Connect(ObsClient client, Config config)
+{
+    var sem = new SemaphoreSlim(0, 1);
+    var authorized = false;
+
+    void HandlePropertyChange(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(client.ConnectionState))
+        {
+            if (client.ConnectionState == OBSStudioClient.Enums.ConnectionState.Connected)
+            {
+                authorized = true;
+                sem.Release();
+            }
+            else if (client.ConnectionState == OBSStudioClient.Enums.ConnectionState.Disconnecting)
+            {
+                authorized = false;
+                sem.Release();
+            }
+        }
+    }
+
+    client.PropertyChanged += HandlePropertyChange;
+    var connected = await client.ConnectAsync(
+        true,
+        config.Credentials.Password,
+        config.Credentials.Host,
+        config.Credentials.Port,
+        OBSStudioClient.Enums.EventSubscriptions.None);
+
+    if (!connected)
+    {
+        client.PropertyChanged -= HandlePropertyChange;
+        return false;
+    }
+
+    await sem.WaitAsync();
+    client.PropertyChanged -= HandlePropertyChange;
+
+    return connected && authorized;
 }
 
 namespace OBSCLIMacros
@@ -130,13 +160,11 @@ namespace OBSCLIMacros
             }
             else
             {
-                var sb = new StringBuilder();
-                sb.AppendLine("Registered Macros:");
-                foreach (var m in Macros.OrderBy(m => m.Key.Key))
-                {
-                    sb.AppendLine($"{m.Key.PrettyPrint()} -> {m.Value}");
-                }
-                return sb.ToString();
+                var lines = Macros
+                    .OrderBy(m => m.Key.Key)
+                    .Select(m => $"{m.Key.PrettyPrint()} -> {m.Value}");
+
+                return $"Registered Macros:{Environment.NewLine}{string.Join(Environment.NewLine, lines)}";
             }
         }
 
@@ -202,9 +230,10 @@ namespace OBSCLIMacros
                 while (true)
                 {
                     Console.Clear();
-                    Console.WriteLine("m) Macro Mode");
-                    Console.WriteLine("e) Edit Mode");
-                    Console.WriteLine("s) Save");
+                    Console.WriteLine(
+@"m) Macro Mode
+e) Edit Mode
+s) Save");
 
                     var key = Console.ReadKey(true);
 
@@ -233,8 +262,9 @@ namespace OBSCLIMacros
             public static async Task Run(Config config, ObsClient client)
             {
                 Console.Clear();
-                Console.WriteLine("Macro State");
-                Console.WriteLine(config.MacrosToString());
+                Console.WriteLine(
+$@"Macro State
+{config.MacrosToString()}");
 
                 while (true)
                 {
@@ -259,9 +289,10 @@ namespace OBSCLIMacros
                 while (true)
                 {
                     Console.Clear();
-                    Console.WriteLine(config.MacrosToString());
-                    Console.WriteLine("n) New Macro");
-                    Console.WriteLine("r) Remove Macro");
+                    Console.WriteLine(
+$@"{config.MacrosToString()}
+n) New Macro
+r) Remove Macro");
 
                     var key = Console.ReadKey(true);
 
@@ -425,10 +456,10 @@ r) Unmute Input");
                     else if (key.Key == ConsoleKey.E)
                     {
                         Console.WriteLine("Listing Inputs...");
-                        var inputs = (await client.GetInputList()).Select((input, index) => (index, input.InputName));
+                        var inputs = await GetInputs(client);
                         foreach (var i in inputs)
                         {
-                            Console.WriteLine($"{i.index}) {i.InputName}");
+                            Console.WriteLine($"{i.Index}) {i.InputName}");
                         }
 
                         Console.WriteLine("Enter index:");
@@ -438,7 +469,7 @@ r) Unmute Input");
                             Console.WriteLine("Not a number!");
                         }
 
-                        var input = inputs.First(i => i.index == index);
+                        var input = inputs.First(i => i.Index == index);
 
                         config.Macros.Add(triggerKey, new MuteInput(input.InputName));
 
@@ -447,10 +478,10 @@ r) Unmute Input");
                     else if (key.Key == ConsoleKey.R)
                     {
                         Console.WriteLine("Listing Inputs...");
-                        var inputs = (await client.GetInputList()).Select((input, index) => (index, input.InputName));
+                        var inputs = await GetInputs(client);
                         foreach (var i in inputs)
                         {
-                            Console.WriteLine($"{i.index}) {i.InputName}");
+                            Console.WriteLine($"{i.Index}) {i.InputName}");
                         }
 
                         Console.WriteLine("Enter index:");
@@ -460,13 +491,20 @@ r) Unmute Input");
                             Console.WriteLine("Not a number!");
                         }
 
-                        var input = inputs.First(i => i.index == index);
+                        var input = inputs.First(i => i.Index == index);
 
                         config.Macros.Add(triggerKey, new UnmuteInput(input.InputName));
 
                         return true;
                     }
                 }
+            }
+
+            private static async Task<IEnumerable<(int Index, string InputName)>> GetInputs(ObsClient client)
+            {
+                return (await client.GetInputList())
+                            .Where(i => i.InputKind.Contains("output") || i.InputKind.Contains("input"))
+                            .Select((input, index) => (index, input.InputName));
             }
         }
 
@@ -477,8 +515,9 @@ r) Unmute Input");
                 while (true)
                 {
                     Console.Clear();
-                    Console.WriteLine(config.MacrosToString());
-                    Console.WriteLine("Enter key to remove");
+                    Console.WriteLine(
+$@"{config.MacrosToString()}
+Enter key to remove");
 
                     var key = Console.ReadKey(true);
                     if (key.Key == ConsoleKey.Escape)
