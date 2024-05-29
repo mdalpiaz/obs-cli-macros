@@ -2,6 +2,7 @@
 using OBSCLIMacros.Actions;
 using OBSCLIMacros.States;
 using OBSStudioClient;
+using OBSStudioClient.Messages;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -350,161 +351,120 @@ s) Switch Scene
 q) Enable Scene Item
 w) Disable Scene Item
 e) Mute Input
-r) Unmute Input");
+r) Unmute Input
+h) Trigger Hotkey");
 
                     var key = Console.ReadKey(true);
-                    if (key.Key == ConsoleKey.Escape)
+                    switch (key.Key)
                     {
-                        return false;
-                    }
-                    else if (key.Key == ConsoleKey.S)
-                    {
-                        Console.WriteLine("Listing Scenes...");
-                        var scenes = await client.GetSceneList();
-                        foreach (var s in scenes.Scenes)
-                        {
-                            Console.WriteLine($"{s.SceneIndex}) {s.SceneName}");
-                        }
+                        case ConsoleKey.Escape:
+                            {
+                                return false;
+                            }
+                        case ConsoleKey.S:
+                            {
+                                Console.WriteLine("Listing Scenes...");
+                                var scenes = await client.GetSceneList();
+                                var scene = PromptForChoice(scenes.Scenes, s => s.SceneName);
 
-                        Console.WriteLine("Enter index:");
-                        int index;
-                        while (!int.TryParse(Console.ReadLine(), out index))
-                        {
-                            Console.WriteLine("Not a number!");
-                        }
+                                config.Macros.Add(triggerKey, new SwitchScene(scene.SceneName));
 
-                        var scene = scenes.Scenes.First(s => s.SceneIndex == index);
+                                return true;
+                            }
+                        case ConsoleKey.Q:
+                            {
+                                Console.WriteLine("Listing Scenes...");
+                                var scenes = await client.GetSceneList();
+                                var scene = PromptForChoice(scenes.Scenes, s => s.SceneName);
 
-                        config.Macros.Add(triggerKey, new SwitchScene(scene.SceneName));
+                                Console.WriteLine("Listing Items...");
+                                var items = await client.GetSceneItemList(scene.SceneName);
+                                var item = PromptForChoice(items, i => i.SourceName);
 
-                        return true;
-                    }
-                    else if (key.Key == ConsoleKey.Q)
-                    {
-                        Console.WriteLine("Listing Scenes...");
-                        var scenes = await client.GetSceneList();
-                        foreach (var s in scenes.Scenes)
-                        {
-                            Console.WriteLine($"{s.SceneIndex}) {s.SceneName}");
-                        }
+                                config.Macros.Add(triggerKey, new EnableItem(scene.SceneName, item.SceneItemId, item.SourceName));
 
-                        Console.WriteLine("Enter index:");
-                        int index;
-                        while (!int.TryParse(Console.ReadLine(), out index))
-                        {
-                            Console.WriteLine("Not a number!");
-                        }
+                                return true;
+                            }
+                        case ConsoleKey.W:
+                            {
+                                Console.WriteLine("Listing Scenes...");
+                                var scenes = await client.GetSceneList();
+                                var scene = PromptForChoice(scenes.Scenes, s => s.SceneName);
 
-                        var scene = scenes.Scenes.First(s => s.SceneIndex == index);
+                                Console.WriteLine("Listing Items...");
+                                var items = await client.GetSceneItemList(scene.SceneName);
+                                var item = PromptForChoice(items, i => i.SourceName);
 
-                        Console.WriteLine("Listing Items...");
-                        var items = await client.GetSceneItemList(scene.SceneName);
-                        foreach (var i in items)
-                        {
-                            Console.WriteLine($"{i.SceneItemIndex}) {i.SourceName}");
-                        }
+                                config.Macros.Add(triggerKey, new DisableItem(scene.SceneName, item.SceneItemId, item.SourceName));
 
-                        Console.WriteLine("Enter index:");
-                        while (!int.TryParse(Console.ReadLine(), out index))
-                        {
-                            Console.WriteLine("Not a number!");
-                        }
+                                return true;
+                            }
+                        case ConsoleKey.E:
+                            {
+                                Console.WriteLine("Listing Inputs...");
+                                var inputs = FilterAudioInputs(await client.GetInputList());
+                                var input = PromptForChoice(inputs, i => i.InputName);
 
-                        var item = items.First(i => i.SceneItemIndex == index);
+                                config.Macros.Add(triggerKey, new MuteInput(input.InputName));
 
-                        config.Macros.Add(triggerKey, new EnableItem(scene.SceneName, item.SceneItemId, item.SourceName));
+                                return true;
+                            }
+                        case ConsoleKey.R:
+                            {
+                                Console.WriteLine("Listing Inputs...");
+                                var inputs = FilterAudioInputs(await client.GetInputList());
+                                var input = PromptForChoice(inputs, i => i.InputName);
 
-                        return true;
-                    }
-                    else if (key.Key == ConsoleKey.W)
-                    {
-                        Console.WriteLine("Listing Scenes...");
-                        var scenes = await client.GetSceneList();
-                        foreach (var s in scenes.Scenes)
-                        {
-                            Console.WriteLine($"{s.SceneIndex}) {s.SceneName}");
-                        }
+                                config.Macros.Add(triggerKey, new UnmuteInput(input.InputName));
 
-                        Console.WriteLine("Enter index:");
-                        int index;
-                        while (!int.TryParse(Console.ReadLine(), out index))
-                        {
-                            Console.WriteLine("Not a number!");
-                        }
+                                return true;
+                            }
+                        case ConsoleKey.H:
+                            {
+                                Console.WriteLine("Listing Hotkeys...");
+                                var hotkeys = await client.GetHotkeyList();
+                                var hotkey = PromptForChoice(hotkeys);
 
-                        var scene = scenes.Scenes.First(s => s.SceneIndex == index);
+                                config.Macros.Add(triggerKey, new TriggerHotkey(hotkey));
 
-                        Console.WriteLine("Listing Items...");
-                        var items = await client.GetSceneItemList(scene.SceneName);
-                        foreach (var i in items)
-                        {
-                            Console.WriteLine($"{i.SceneItemIndex}) {i.SourceName}");
-                        }
-
-                        Console.WriteLine("Enter index:");
-                        while (!int.TryParse(Console.ReadLine(), out index))
-                        {
-                            Console.WriteLine("Not a number!");
-                        }
-
-                        var item = items.First(i => i.SceneItemIndex == index);
-
-                        config.Macros.Add(triggerKey, new DisableItem(scene.SceneName, item.SceneItemId, item.SourceName));
-
-                        return true;
-                    }
-                    else if (key.Key == ConsoleKey.E)
-                    {
-                        Console.WriteLine("Listing Inputs...");
-                        var inputs = await GetInputs(client);
-                        foreach (var i in inputs)
-                        {
-                            Console.WriteLine($"{i.Index}) {i.InputName}");
-                        }
-
-                        Console.WriteLine("Enter index:");
-                        int index;
-                        while (!int.TryParse(Console.ReadLine(), out index))
-                        {
-                            Console.WriteLine("Not a number!");
-                        }
-
-                        var input = inputs.First(i => i.Index == index);
-
-                        config.Macros.Add(triggerKey, new MuteInput(input.InputName));
-
-                        return true;
-                    }
-                    else if (key.Key == ConsoleKey.R)
-                    {
-                        Console.WriteLine("Listing Inputs...");
-                        var inputs = await GetInputs(client);
-                        foreach (var i in inputs)
-                        {
-                            Console.WriteLine($"{i.Index}) {i.InputName}");
-                        }
-
-                        Console.WriteLine("Enter index:");
-                        int index;
-                        while (!int.TryParse(Console.ReadLine(), out index))
-                        {
-                            Console.WriteLine("Not a number!");
-                        }
-
-                        var input = inputs.First(i => i.Index == index);
-
-                        config.Macros.Add(triggerKey, new UnmuteInput(input.InputName));
-
-                        return true;
+                                return true;
+                            }
                     }
                 }
             }
 
-            private static async Task<IEnumerable<(int Index, string InputName)>> GetInputs(ObsClient client)
+
+            private static IEnumerable<(int Index, T Value)> AddIndex<T>(this IEnumerable<T> values)
             {
-                return (await client.GetInputList())
-                            .Where(i => i.InputKind.Contains("output") || i.InputKind.Contains("input"))
-                            .Select((input, index) => (index, input.InputName));
+                return values.Select((v, i) => (i, v));
+            }
+
+            private static T PromptForChoice<T>(IEnumerable<T> values, Func<T, string> toStringFunc)
+            {
+                var newVals = values.AddIndex();
+                foreach (var v in newVals)
+                {
+                    Console.WriteLine($"{v.Index})\t{toStringFunc(v.Value)}");
+                }
+
+                Console.WriteLine("Enter index:");
+                int index;
+                while (!int.TryParse(Console.ReadLine(), out index))
+                {
+                    Console.WriteLine("Not a number!");
+                }
+
+                return newVals.First(v => v.Index == index).Value;
+            }
+
+            private static T PromptForChoice<T>(IEnumerable<T> values)
+            {
+                return PromptForChoice(values, v => v!.ToString()!);
+            }
+
+            private static IEnumerable<Input> FilterAudioInputs(IEnumerable<Input> inputs)
+            {
+                return inputs.Where(i => i.InputKind.Contains("output") || i.InputKind.Contains("input"));
             }
         }
 
@@ -547,7 +507,8 @@ Enter key to remove");
             DisableItem,
             ToggleInput,
             MuteInput,
-            UnmuteInput
+            UnmuteInput,
+            TriggerHotkey
         }
 
         interface IAction
@@ -600,6 +561,11 @@ Enter key to remove");
                         {
                             var inputName = Parameters[nameof(UnmuteInput.InputName)];
                             return new UnmuteInput(inputName);
+                        }
+                    case ActionTypes.TriggerHotkey:
+                        {
+                            var hotkey = Parameters[nameof(TriggerHotkey.Hotkey)];
+                            return new TriggerHotkey(hotkey);
                         }
                 }
                 throw new ArgumentOutOfRangeException($"Action type {Type} is unknown!");
@@ -787,6 +753,34 @@ Enter key to remove");
             public override string ToString()
             {
                 return $"Unmute {InputName}";
+            }
+        }
+
+        class TriggerHotkey : IAction
+        {
+            public string Hotkey { get; private set; }
+
+            public TriggerHotkey(string hotkey)
+            {
+                Hotkey = hotkey;
+            }
+
+            public async Task Run(ObsClient client)
+            {
+                await client.TriggerHotkeyByName(Hotkey);
+            }
+
+            public SerializableAction ToSerializableAction()
+            {
+                var act = new SerializableAction();
+                act.Type = ActionTypes.TriggerHotkey;
+                act.Parameters.Add(nameof(Hotkey), Hotkey);
+                return act;
+            }
+
+            public override string ToString()
+            {
+                return $"Trigger Hotkey: {Hotkey}";
             }
         }
     }
